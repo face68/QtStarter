@@ -85,4 +85,4 @@ Troubleshooting
 
 License
 
-(Add your preferred license, e.g., MIT.)
+MIT

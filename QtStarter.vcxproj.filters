@@ -67,9 +67,10 @@
     </QtMoc>
   </ItemGroup>
   <ItemGroup>
-    <Page Include="BlankPage.xaml" />
+    <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="packages.config" />
+    <Text Include="README.en.md" />
+    <Text Include="README.md" />
   </ItemGroup>
 </Project>

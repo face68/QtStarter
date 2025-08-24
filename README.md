@@ -85,4 +85,4 @@ Fehlerbehebung
 
 Lizenz
 
-(Füge hier deine Lizenz ein, z. B. MIT.)
+MIT
