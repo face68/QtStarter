@@ -818,7 +818,7 @@ void MainWindow::onSaveBatch() {
 			")\n";
 	}
 
-	// 3) Helper zum Escapen für cmd.exe (%, ^, ", &, |, <, >)
+	// 3) Escaper für cmd.exe (%, ^, \", &, |, <, >)
 	auto batEscape = [] ( QString s ) -> QString {
 
 		s.replace( "%", "%%" );
@@ -831,7 +831,7 @@ void MainWindow::onSaveBatch() {
 		return s;
 		};
 
-	// 4) Apps schreiben (UAC=true: elevated via start; UAC=false: unelevated via :RunUnelevated)
+	// 4) Apps schreiben
 	std::function<void( QStandardItem* )> walk = [&] ( QStandardItem* it ) {
 
 		if( it == nullptr ) {
@@ -851,8 +851,27 @@ void MainWindow::onSaveBatch() {
 
 				out << "\nREM Name=" << safeName << " | Args=" << app.args << "\n";
 
-				if( app.uac ) {
+				if( needsElevate ) {
 
+					if( app.uac ) {
+
+						if( !wd.isEmpty() ) {
+
+							out << "start \"\" /D \"" << wd << "\" \"" << exe << "\" " << args << "\n";
+						}
+						else {
+
+							out << "start \"\" \"" << exe << "\" " << args << "\n";
+						}
+					}
+					else {
+
+						// Unelevated über Explorer-Shell
+						out << "call :RunUnelevated \"" << exe << "\" \"" << args << "\" \"" << wd << "\"\n";
+					}
+				}
+				else {
+					// keine UAC-Apps insgesamt -> alles normal
 					if( !wd.isEmpty() ) {
 
 						out << "start \"\" /D \"" << wd << "\" \"" << exe << "\" " << args << "\n";
@@ -861,10 +880,6 @@ void MainWindow::onSaveBatch() {
 
 						out << "start \"\" \"" << exe << "\" " << args << "\n";
 					}
-				}
-				else {
-
-					out << "call :RunUnelevated \"" << exe << "\" \"" << args << "\" \"" << wd << "\"\n";
 				}
 			}
 		}
@@ -883,15 +898,29 @@ void MainWindow::onSaveBatch() {
 		}
 	}
 
-	// 5) Helper-Label ans Dateiende (damit die Batch oben nicht "hineinläuft")
-	out << "\n:RunUnelevated\n"
-		"set \"exe=%~1\"\n"
-		"set \"args=%~2\"\n"
-		"set \"wd=%~3\"\n"
-		"powershell -NoProfile -ExecutionPolicy Bypass -Command "
-		"\"$s=New-Object -ComObject Shell.Application; $s.ShellExecute($args[0],$args[1],$args[2],'open',1)\" "
-		"\"%exe%\" \"%args%\" \"%wd%\"\n"
-		"exit /b\n";
+	// 5) Batch beenden + Helper nur falls elevated gebraucht wird
+	if( needsElevate ) {
+
+		out << "\nexit\n"
+			"goto :eof\n"
+			"\n:RunUnelevated\n"
+			"set \"exe=%~1\"\n"
+			"set \"args=%~2\"\n"
+			"set \"wd=%~3\"\n"
+			"powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command ^\n"
+			" \"$exe='%exe%'; $args='%args%'; $wd='%wd%';"
+			"  if([string]::IsNullOrWhiteSpace($args)){$args=$null};"
+			"  if([string]::IsNullOrWhiteSpace($wd)){$wd=$null};"
+			"  $shell = New-Object -ComObject Shell.Application;"
+			"  $shell.ShellExecute($exe, $args, $wd, 'open', 1)\" ^\n"
+			" \n"
+			"exit /b\n";
+
+	}
+	else {
+
+		out << "\nexit\n";
+	}
 }
 
 void MainWindow::onLoadBatch() {
