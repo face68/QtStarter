@@ -102,11 +102,14 @@
       <DynamicSource Condition="'$(Configuration)|$(Platform)'=='Release|x64'">input</DynamicSource>
       <QtMocFileName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">%(Filename).moc</QtMocFileName>
     </ClCompile>
+    <ClCompile Include="AppListDelegate.cpp" />
     <ClCompile Include="QtStarter.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <QtMoc Include="AppFilterProxyModel.h" />
     <ClInclude Include="AppItem.h" />
     <ClInclude Include="LinkResolver.h" />
+    <QtMoc Include="AppListDelegate.h" />
     <QtMoc Include="MainWindow.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

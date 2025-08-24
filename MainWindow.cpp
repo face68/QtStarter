@@ -1,5 +1,7 @@
 ﻿#include "MainWindow.h"
 #include "LinkResolver.h"
+#include "AppListDelegate.h"
+#include "AppFilterProxyModel.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -15,39 +17,35 @@
 #include <QApplication>
 #include <QPushButton>
 #include <QTimer>
+#include <QHeaderView>
+#include <QScrollBar>
+#include <QSplitter>
 
-#ifdef _WIN32
 #include <windows.h>
-#endif
 
-enum Col {
-	COL_NAME = 0, COL_UAC, COL_ARGS_LABEL, COL_ARGS_VALUE, COL__COUNT
-};
-
+auto dump = [&] ( const QPalette& pal, QPalette::ColorGroup g ) {
+	qDebug() << "Base" << pal.color( g, QPalette::Base );
+	qDebug() << "Alt " << pal.color( g, QPalette::AlternateBase );
+	qDebug() << "Win " << pal.color( g, QPalette::Window );
+	};
 
 static QString startMenuCommon() {
-#ifdef _WIN32
 	const QString programData = qEnvironmentVariable( "ProgramData" );
 	return programData + "/Microsoft/Windows/Start Menu/Programs";
-#else
-	return QString();
-#endif
 }
 
 static QString startMenuUser() {
-#ifdef _WIN32
 	const QString appData = qEnvironmentVariable( "AppData" );
 	return appData + "/Microsoft/Windows/Start Menu/Programs";
-#else
-	return QString();
-#endif
 }
 
-MainWindow::MainWindow( QWidget* parent ) : QMainWindow( parent ) {
+MainWindow::MainWindow( QWidget* parent ) : QMainWindow( parent ), _buildingSelected( false ) {
 
 	qRegisterMetaType<AppItem>( "AppItem" );
 	buildUi();
 	scanStartMenu();
+	setStyleSheets();
+	QTimer::singleShot( 0, this, [this] () { applyListCols(); } );
 }
 
 void MainWindow::buildUi() {
@@ -55,51 +53,190 @@ void MainWindow::buildUi() {
 	auto* central = new QWidget( this );
 	setCentralWidget( central );
 
-	auto* v = new QVBoxLayout( central );
+	auto* root = new QVBoxLayout( central );
+	root->setContentsMargins( 6, 6, 6, 6 );
+	root->setSpacing( 6 );
 
+	// Topbar: Suche (links) + Buttons (rechts)
+	auto* top = new QHBoxLayout();
+
+	_searchEdit = new QLineEdit( central );
+	_searchEdit->setPlaceholderText( "Search..." );
+	_searchEdit->setClearButtonEnabled( true );
+	_searchEdit->setFixedHeight( 28 );
+	top->addWidget( _searchEdit, /*stretch*/ 1 );
+
+	auto* btnAdd = new QPushButton( "Add EXE/BAT", central );
+	auto* btnLoad = new QPushButton( "Batch load", central );
+	auto* btnSave = new QPushButton( "Batch save", central );
+	btnAdd->setFixedHeight( 28 );
+	btnLoad->setFixedHeight( 28 );
+	btnSave->setFixedHeight( 28 );
+	
+	top->addWidget( btnAdd );
+	top->addWidget( btnLoad );
+	top->addWidget( btnSave );
+
+	root->addLayout( top );
+
+	// Modelle / Proxy
+	_proxy = new AppFilterProxyModel( this );
+	_proxy->setSourceModel( &_model );
+	_proxy->setFilterCaseSensitivity( Qt::CaseInsensitive );
+	_proxy->setFilterKeyColumn( COL_NAME );
+
+	// Tree (oben)
 	_tree = new QTreeView( central );
-	_tree->setModel( &_model );
+	_tree->setModel( _proxy );
+	_tree->setHeaderHidden( false );
+	_tree->setExpandsOnDoubleClick( false );
+	_tree->setSelectionMode( QAbstractItemView::NoSelection );
 	_tree->setRootIsDecorated( true );
 	_tree->setItemsExpandable( true );
-	_tree->setHeaderHidden( false );
+	_tree->setAlternatingRowColors( true );
 	_tree->setUniformRowHeights( true );
-	_tree->setEditTriggers( QAbstractItemView::NoEditTriggers );
-	_tree->setDragDropMode( QAbstractItemView::NoDragDrop );
-	_tree->setSelectionMode( QAbstractItemView::SingleSelection );
+	_tree->setItemDelegateForColumn( COL_UAC, new NoHoverDelegate( 28, _tree ) );
+	_tree->setItemDelegateForColumn( COL_ARGS_VALUE, new NoHoverDelegate( 28, _tree ) );
 
-	connect( _tree, &QTreeView::doubleClicked, this, &MainWindow::onTreeDoubleClicked );
-	connect( &_model, &QStandardItemModel::dataChanged, this, &MainWindow::onModelDataChanged );
+	// Auswahlliste (unten)
+	_selectedListModel = new QStandardItemModel( this );
+	_selectedListView = new QTableView( central );
+	_selectedListView->setItemDelegate( new AppListDelegate( this ) );
+	_selectedListView->setModel( _selectedListModel );
+	_selectedListView->setSelectionBehavior( QAbstractItemView::SelectRows );
+	_selectedListView->setSelectionMode( QAbstractItemView::SingleSelection );
+	_selectedListView->setShowGrid( false );
+	_selectedListView->setAlternatingRowColors( true );
+	_selectedListView->horizontalHeader()->setStretchLastSection( true );
+	_selectedListView->horizontalHeader()->setDefaultAlignment( Qt::AlignLeft | Qt::AlignVCenter );
+	_selectedListView->verticalHeader()->setVisible( false );
+	_selectedListView->setMinimumHeight( 100 ); // statt setMaximumHeight
 
-	v->addWidget( _tree, 1 );
+	// Splitter (Tree oben, Liste unten)
+	auto* split = new QSplitter( Qt::Vertical, central );
+	split->setChildrenCollapsible( false );
+	split->setOpaqueResize( true );
+	split->addWidget( _tree );
+	split->addWidget( _selectedListView );
+	split->setStretchFactor( 0, 3 );
+	split->setStretchFactor( 1, 1 );
+	root->addWidget( split, /*stretch*/ 1 );
 
-	auto* h = new QHBoxLayout();
-	auto* btnSave = new QPushButton( "Batch speichern", central );
-	auto* btnLoad = new QPushButton( "Batch laden", central );
-	auto* btnAdd = new QPushButton( "EXE/BAT hinzufuegen", central );
+	// Spalten / Labels
+	_model.setColumnCount( COL__COUNT );
+	_model.setHorizontalHeaderLabels( { "Name", "UAC", "Args" } );
+
+	// Signals
 	connect( btnSave, &QPushButton::clicked, this, &MainWindow::onSaveBatch );
 	connect( btnLoad, &QPushButton::clicked, this, &MainWindow::onLoadBatch );
 	connect( btnAdd, &QPushButton::clicked, this, &MainWindow::onAddExecutable );
 
-	h->addStretch();
-	h->addWidget( btnAdd );
-	h->addWidget( btnLoad );
-	h->addWidget( btnSave );
-	v->addLayout( h );
+	connect( _tree, &QTreeView::doubleClicked, this, &MainWindow::onTreeDoubleClicked );
+	connect( &_model, &QStandardItemModel::dataChanged, this, &MainWindow::onModelDataChanged );
+	connect( _selectedListView, &QTableView::doubleClicked, this, &MainWindow::onListDoubleClicked );
+	connect( _selectedListModel, &QStandardItemModel::itemChanged, this, &MainWindow::onSelectedListItemChanged );
+	connect( _searchEdit, &QLineEdit::textChanged, this, &MainWindow::onSearchTextChanged );
 
-	_selectedList = new QListWidget( central );
-	_selectedList->setMaximumHeight( 120 );
-	connect( _selectedList, &QListWidget::itemChanged, this, &MainWindow::onSelectedListItemChanged );
+	// Startgrößen + Spaltenbreiten erst nach Layout
+	QTimer::singleShot( 0, this, [this, split] () {
 
-	v->addWidget( _selectedList );
+		const QList<int> s = split->sizes();
+		if( s.size() == 2 ) {
 
-	_model.setHorizontalHeaderLabels( { "Name" } );
+			const int total = s[ 0 ] + s[ 1 ];
+			split->setSizes( { int( total * 0.70 ), int( total * 0.30 ) } );
+		}
+
+		applyListCols();
+						} );
+}
+
+void MainWindow::setStyleSheets() {
+
+	const QString headerQss =
+		"QHeaderView::section {"
+		"  background: palette(midlight);"
+		"  color: palette(window-text);"
+		"  font-weight: normal;"
+		"}";
+
+	const QString rowQss =
+		"QTreeView::item { height:28px; padding:6px 8px; }"
+		"QTableView::item { height:28px; padding:6px 8px; }";
+
+	const QString buttonQss = "QPushButton { padding: 0 12px; }";
+
+	if( _tree ) {
+
+		_tree->header()->setStyleSheet( headerQss );
+		_tree->setStyleSheet( rowQss );
+	}
+
+	if( _selectedListView ) {
+
+		_selectedListView->horizontalHeader()->setStyleSheet( headerQss );
+		_selectedListView->setStyleSheet( rowQss );
+	}
+
+	this->setStyleSheet( this->styleSheet() + buttonQss );
+}
+
+void MainWindow::changeEvent( QEvent* e ) {
+
+	if( e->type() == QEvent::ApplicationPaletteChange
+		|| e->type() == QEvent::ThemeChange ) {
+
+		if( _stylingNow ) {
+			return;
+		}
+
+		_stylingNow = true;
+		setStyleSheets();
+		_stylingNow = false;
+	}
+
+	QMainWindow::changeEvent( e );
+}
+
+void MainWindow::applyListCols() {
+	// --- Liste ---
+	auto* lhdr = _selectedListView->horizontalHeader();
+
+	const int lname = int( lhdr->viewport()->width() * 0.5 );     // 50%
+	const int luac = lhdr->fontMetrics().horizontalAdvance( "UAC" ); // fix: nur Textbreite
+
+	lhdr->resizeSection( 0, lname );
+	lhdr->resizeSection( 1, luac );
+
+	// Rest exakt ohne Überstand:
+	const int lrest = qMax( 0, lhdr->viewport()->width() - lhdr->sectionSize( 0 ) - lhdr->sectionSize( 1 ) );
+	lhdr->resizeSection( 2, lrest );
+
+	// --- Tree ---
+	auto* thdr = _tree->header();
+
+	const int tname = int( thdr->viewport()->width() * 0.5 );
+	const int tuac = thdr->fontMetrics().horizontalAdvance( "UAC" );
+
+	thdr->resizeSection( 0, tname );
+	thdr->resizeSection( 1, tuac );
+
+	const int trest = qMax( 0, thdr->viewport()->width() - thdr->sectionSize( 0 ) - thdr->sectionSize( 1 ) );
+	thdr->resizeSection( 2, trest );
+}
+
+
+void MainWindow::resizeEvent( QResizeEvent* e ) {
+
+	QMainWindow::resizeEvent( e );
+	applyListCols();
 }
 
 void MainWindow::scanStartMenu() {
 
 	_pathIndex.clear();
 	_model.clear();
-	_model.setHorizontalHeaderLabels( { "Name" } );
+	_model.setHorizontalHeaderLabels( { "Name", "UAC", "Args" } );
 
 	// 1) Startmenü-Wurzeln
 	const QStringList roots = {
@@ -118,10 +255,17 @@ void MainWindow::scanStartMenu() {
 		while( it.hasNext() ) {
 			const QString file = it.next();
 
+			QString workdir;
 			QString target = file;
 			if( file.endsWith( ".lnk", Qt::CaseInsensitive ) ) {
-				target = resolveShortcutTarget( file );
-				if( target.isEmpty() || !target.endsWith( ".exe", Qt::CaseInsensitive ) ) continue;
+				const auto s = resolveShortcut( file );
+				target = s.path;
+				workdir = s.workingDir;
+				// args/workingDir kannst du hier direkt ins AppItem übernehmen, wenn gewünscht:
+				// app.args = s.arguments;
+				if( target.isEmpty() || !target.endsWith( ".exe", Qt::CaseInsensitive ) ) {
+					continue;
+				}
 			}
 			else if( !file.endsWith( ".exe", Qt::CaseInsensitive ) ) {
 				continue;
@@ -132,7 +276,7 @@ void MainWindow::scanStartMenu() {
 			if( name.contains( "Uninstall", Qt::CaseInsensitive ) || name.contains( "deinstall", Qt::CaseInsensitive ) )
 				continue;
 
-			AppItem app{ name, target, QString(), false };
+			AppItem app{ name, target, workdir, QString(), false };
 			buckets[ rel ].push_back( app );
 			_pathIndex.insert( app.path.toLower(), app );
 		}
@@ -165,8 +309,22 @@ void MainWindow::scanStartMenu() {
 
 			auto* folder = new QStandardItem( part );
 			folder->setEditable( false );
-			folder->setData( 0, Roles::TypeRole ); // Folder
-			parent->appendRow( folder );
+			folder->setData( 0, Roles::TypeRole );
+			//folder->setFlags( folder->flags() & ~Qt::ItemIsSelectable );
+
+			auto* uacDummy = new QStandardItem();
+			auto* argsDummy = new QStandardItem();
+
+			// nur Editierbarkeit entfernen (weiter selektierbar/aktiv)
+			uacDummy->setFlags( Qt::NoItemFlags );
+			uacDummy->setFlags( ( Qt::ItemIsEnabled )
+								& ~( Qt::ItemIsEditable | Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled ) );
+
+			argsDummy->setFlags( Qt::NoItemFlags );
+			argsDummy->setFlags( ( Qt::ItemIsEnabled )
+								& ~( Qt::ItemIsEditable | Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled ) );
+
+			parent->appendRow( { folder, uacDummy, argsDummy } );
 			parent = folder;
 			folderNodeByPath.insert( acc, folder );
 		}
@@ -181,13 +339,25 @@ void MainWindow::scanStartMenu() {
 				   } );
 		for( const auto& app : apps ) {
 
-			auto* row = new QStandardItem( app.name );
-			row->setEditable( false );
-			row->setFlags( row->flags() | Qt::ItemIsUserCheckable );
-			row->setData( app.checked ? Qt::Checked : Qt::Unchecked, Qt::CheckStateRole );
-			row->setData( 1, Roles::TypeRole );                          // App
-			row->setData( QVariant::fromValue( app ), Roles::AppDataRole ); // Payload
-			_model.invisibleRootItem()->appendRow( row );
+			auto* nameIt = new QStandardItem( app.name );
+			nameIt->setEditable( false );
+			nameIt->setFlags( nameIt->flags() | Qt::ItemIsUserCheckable );
+			nameIt->setData( app.checked ? Qt::Checked : Qt::Unchecked, Qt::CheckStateRole );
+			nameIt->setData( 1, Roles::TypeRole );
+			nameIt->setData( QVariant::fromValue( app ), Roles::AppDataRole );
+			//nameIt->setFlags( nameIt->flags() & ~Qt::ItemIsSelectable );
+
+			auto* uacIt = new QStandardItem();
+			uacIt->setEditable( false );
+			uacIt->setFlags( uacIt->flags() | Qt::ItemIsUserCheckable );
+			uacIt->setData( Qt::Unchecked, Qt::CheckStateRole );
+			//uacIt->setFlags( uacIt->flags() & ~Qt::ItemIsSelectable );
+
+			auto* argsIt = new QStandardItem( app.args );
+			argsIt->setEditable( true );
+			//argsIt->setFlags( argsIt->flags() & ~Qt::ItemIsSelectable );
+
+			_model.invisibleRootItem()->appendRow( { nameIt, uacIt, argsIt } );
 		}
 		buckets.remove( QString() );
 	}
@@ -203,18 +373,31 @@ void MainWindow::scanStartMenu() {
 		QStandardItem* folder = ensureFolder( it.key() );
 		for( const auto& app : apps ) {
 
-			auto* row = new QStandardItem( app.name );
-			row->setEditable( false );
-			row->setFlags( row->flags() | Qt::ItemIsUserCheckable );
-			row->setData( app.checked ? Qt::Checked : Qt::Unchecked, Qt::CheckStateRole );
-			row->setData( 1, Roles::TypeRole );
-			row->setData( QVariant::fromValue( app ), Roles::AppDataRole );
-			folder->appendRow( row );
+			auto* nameIt = new QStandardItem( app.name );
+			nameIt->setEditable( false );
+			nameIt->setFlags( nameIt->flags() | Qt::ItemIsUserCheckable );
+			nameIt->setData( app.checked ? Qt::Checked : Qt::Unchecked, Qt::CheckStateRole );
+			nameIt->setData( 1, Roles::TypeRole );
+			nameIt->setData( QVariant::fromValue( app ), Roles::AppDataRole );
+			//nameIt->setFlags( nameIt->flags() & ~Qt::ItemIsSelectable );
+
+			auto* uacIt = new QStandardItem();
+			uacIt->setEditable( false );
+			uacIt->setFlags( uacIt->flags() | Qt::ItemIsUserCheckable );
+			uacIt->setData( Qt::Unchecked, Qt::CheckStateRole );
+			//uacIt->setFlags( uacIt->flags() & ~Qt::ItemIsSelectable );
+
+			auto* argsIt = new QStandardItem( app.args );
+			argsIt->setEditable( true );
+			//argsIt->setFlags( argsIt->flags() & ~Qt::ItemIsSelectable );
+
+			folder->appendRow( { nameIt, uacIt, argsIt } );
 		}
 	}
 
 	updateSelectedList();
 }
+
 
 QStandardItem* MainWindow::ensureFolderPath( const QString& relFolder ) {
 
@@ -243,8 +426,19 @@ QStandardItem* MainWindow::ensureFolderPath( const QString& relFolder ) {
 		if( !match ) {
 			match = new QStandardItem( part );
 			match->setEditable( false );
-			match->setData( 0, Roles::TypeRole );        // Folder
-			parent->appendRow( match );                  // garantiert Spalte 0
+			match->setData( 0, Roles::TypeRole );
+			match->setFlags( match->flags() & ~Qt::ItemIsSelectable);
+
+			auto* uacDummy = new QStandardItem();
+			auto* argsDummy = new QStandardItem();
+			uacDummy->setFlags( ( Qt::ItemIsEnabled )
+								 & ~( Qt::ItemIsEditable | Qt::ItemIsSelectable
+								 | Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled ) );
+			argsDummy->setFlags( ( Qt::ItemIsEnabled )
+								 & ~( Qt::ItemIsEditable | Qt::ItemIsSelectable
+								 | Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled ) );
+
+			parent->appendRow( { match, uacDummy, argsDummy } );
 		}
 
 		parent = match;
@@ -270,101 +464,188 @@ QString MainWindow::getRelativeFolder( const QString& root, const QString& fullP
 	return "";
 }
 
+void MainWindow::onSearchTextChanged( const QString& text ) {
+
+	QRegularExpression rx( QRegularExpression::escape( text ), QRegularExpression::PatternOption::CaseInsensitiveOption );
+	_proxy->setFilterRegularExpression( rx );
+
+	if( !text.isEmpty() ) {
+		_tree->expandAll();
+	}
+	else {
+		_tree->collapseAll();
+	}
+}
+
 void MainWindow::onTreeDoubleClicked( const QModelIndex& idx ) {
 
-	if( !idx.isValid() )
-		return;
-
-	const int type = idx.data( Roles::TypeRole ).toInt();
-	if( type == 0 ) {
-
-		// folder -> expand/collapse
-		_tree->setExpanded( idx, !_tree->isExpanded( idx ) );
+	if( !idx.isValid() ) {
 		return;
 	}
 
-	// app: toggle checked / list; double-click won't immediately start the app
-	AppItem app = idx.data( Roles::AppDataRole ).value<AppItem>();
-	app.checked = !app.checked;
-	_model.setData( idx, QVariant::fromValue( app ), Roles::AppDataRole );
+	QModelIndex srcIdx = _proxy->mapToSource( idx );
+	if( !srcIdx.isValid() ) {
+		return;
+	}
 
-	_model.dataChanged( idx, idx, { Roles::AppDataRole } );
-	toggleAppItem( idx, !app.checked );
+	const QModelIndex nameIdx = srcIdx.sibling( srcIdx.row(), COL_NAME );
+
+	// Für View-Operationen zurück in Proxy mappen:
+	const QModelIndex proxyNameIdx = _proxy->mapFromSource( nameIdx );
+
+	if( nameIdx.data( Roles::TypeRole ).toInt() == 0 ) {
+
+		const bool ex = _tree->isExpanded( proxyNameIdx );
+		_tree->setExpanded( proxyNameIdx, !ex );
+		return;
+	}
+
+	auto type = srcIdx.data( Roles::TypeRole );
+	if( type == 1 ) {
+		auto cs = static_cast< Qt::CheckState >( srcIdx.data( Qt::CheckStateRole ).toInt() );
+		_model.setData( srcIdx, ( cs == Qt::Checked ? Qt::Unchecked : Qt::Checked ), Qt::CheckStateRole );
+		return;
+	}
+
+	AppItem app = srcIdx.data( Roles::AppDataRole ).value<AppItem>();
+	app.checked = !app.checked;
+	_model.setData( srcIdx, QVariant::fromValue( app ), Roles::AppDataRole );
+	_model.dataChanged( srcIdx, srcIdx, { Roles::AppDataRole } );
+
+	toggleAppItem( srcIdx, !app.checked );
+}
+
+void MainWindow::onListDoubleClicked( const QModelIndex& idx ) {
+
+	if( !idx.isValid() || idx.column() != 0 ) {
+		return;
+	}
+
+	QStandardItem* item = _selectedListModel->itemFromIndex( idx );
+	if( !item ) {
+		return;
+	}
+
+	const bool checked = ( item->checkState() == Qt::Checked );
+	item->setCheckState( checked ? Qt::Unchecked : Qt::Checked );
+	// löst automatisch onSelectedListItemChanged aus
 }
 
 void MainWindow::onModelDataChanged( const QModelIndex& topLeft, const QModelIndex& bottomRight, const QVector<int>& roles ) {
 
-	// Only interested in single-item changes
 	if( topLeft != bottomRight )
 		return;
 
-	// Only interested in check state changes
-	if( !roles.isEmpty() && !roles.contains( Qt::CheckStateRole ) )
+	// immer über den Index gehen (funktioniert auch in Unterordnern)
+	auto nameIdx = topLeft.siblingAtColumn( COL_NAME );
+	auto uacIdx = topLeft.siblingAtColumn( COL_UAC );
+	auto argsIdx = topLeft.siblingAtColumn( COL_ARGS_VALUE );
+
+	QStandardItem* nameIt = _model.itemFromIndex( nameIdx );
+	QStandardItem* uacIt = _model.itemFromIndex( uacIdx );
+	QStandardItem* argsIt = _model.itemFromIndex( argsIdx );
+
+	if( !nameIt )
 		return;
 
-	QStandardItem* item = _model.itemFromIndex( topLeft );
-	if( !item )
+	if( nameIt->data( Roles::TypeRole ).toInt() != 1 )
 		return;
 
-	// Only for App items (not folders)
-	if( item->data( Roles::TypeRole ).toInt() != 1 )
-		return;
+	// Check direkt vom Item lesen – stabil bei Root & Child
+	const bool checkedNow = ( nameIt->checkState() == Qt::Checked );
 
-	// Get the AppItem
-	AppItem app = item->data( Roles::AppDataRole ).value<AppItem>();
-	bool checked = item->data( Qt::CheckStateRole ).toInt() == Qt::Checked;
+	AppItem app = nameIt->data( Roles::AppDataRole ).value<AppItem>();
+	app.checked = checkedNow;
 
-	toggleAppItem( topLeft, checked );
+	if( checkedNow ) {
+
+		if( argsIt )
+			app.args = argsIt->text();
+
+		if( uacIt )
+			app.uac = ( uacIt->checkState() == Qt::Checked );
+	}
+	else {
+
+		if( argsIt )
+			argsIt->setText(  "" );
+
+		if( uacIt )
+			uacIt->setCheckState( Qt::Unchecked );
+
+		app.args.clear();
+		app.uac = false;
+	}
+
+	{
+		QSignalBlocker block( &_model );
+		nameIt->setData( QVariant::fromValue( app ), Roles::AppDataRole );
+	}
+
+	updateSelectedList();
 }
 
-void MainWindow::onSelectedListItemChanged( QListWidgetItem* item ) {
+void MainWindow::onSelectedListItemChanged( QStandardItem* item ) {
+
+	if( _buildingSelected )
+		return;
+
 	if( !item )
 		return;
 
-	// Only act if the checkbox was unchecked (i.e., user wants to remove)
-	if( item->checkState() == Qt::Unchecked ) {
-		QString path = item->data( Qt::UserRole ).toString();
-		// Find the corresponding item in the tree and uncheck it
-		std::function<bool( QStandardItem* )> findAndUncheck = [&] ( QStandardItem* it ) -> bool {
-			if( !it ) return false;
-			if( it->data( Roles::TypeRole ).toInt() == 1 ) {
-				AppItem app = it->data( Roles::AppDataRole ).value<AppItem>();
-				if( app.path.compare( path, Qt::CaseInsensitive ) == 0 ) {
-					app.checked = false;
-					it->setData( QVariant::fromValue( app ), Roles::AppDataRole );
-					it->setData( Qt::Unchecked, Qt::CheckStateRole );
-					// Collapse folder if no other checked
-					QStandardItem* parent = it->parent();
-					if( parent ) {
-						bool anyChecked = false;
-						for( int r = 0; r < parent->rowCount(); ++r ) {
-							QStandardItem* sibling = parent->child( r, 0 );
-							if( sibling && sibling->data( Roles::TypeRole ).toInt() == 1 ) {
-								AppItem siblingApp = sibling->data( Roles::AppDataRole ).value<AppItem>();
-								if( siblingApp.checked ) {
-									anyChecked = true;
-									break;
-								}
-							}
-						}
-						if( !anyChecked ) {
-							QModelIndex parentIdx = _model.indexFromItem( parent );
-							_tree->setExpanded( parentIdx, false );
-						}
-					}
-					return true;
-				}
-			}
-			for( int r = 0; r < it->rowCount(); ++r )
-				if( findAndUncheck( it->child( r ) ) )
-					return true;
-			return false;
-			};
-		QStandardItem* root = _model.invisibleRootItem();
-		for( int r = 0; r < root->rowCount(); ++r )
-			if( findAndUncheck( root->child( r ) ) )
-				break;
+	int row = item->row();
+	QStandardItem* nameItem = _selectedListModel->item( row, 0 );
+	QStandardItem* uacItem = _selectedListModel->item( row, 1 );
+	QStandardItem* argsItem = _selectedListModel->item( row, 2 );
+
+	QString path = nameItem ? nameItem->data( Qt::UserRole ).toString() : QString();
+	if( path.isEmpty() )
+		return;
+
+	QStandardItem* treeItem = findTreeItemByPath( path );
+	if( !treeItem )
+		return;
+
+	AppItem app = treeItem->data( Roles::AppDataRole ).value<AppItem>();
+
+	// Reflect checkbox state
+	bool checked = nameItem->checkState() == Qt::Checked;
+	if( !checked ) {
+		if( treeItem ) {
+			treeItem->setData( Qt::Unchecked, Qt::CheckStateRole );
+		}
+		return;  // früh beenden -> kein Zugriff mehr auf gelöschte Items
 	}
+
+	app.checked = checked;
+	treeItem->setData( checked ? Qt::Checked : Qt::Unchecked, Qt::CheckStateRole );
+
+	// Reflect UAC state
+	if( uacItem )
+		app.uac = ( uacItem->checkState() == Qt::Checked );
+
+	// Reflect Args
+	if( argsItem )
+		app.args = argsItem->text();
+
+	// Write back to tree
+	{
+		QSignalBlocker block( &_model );
+		treeItem->setData( QVariant::fromValue( app ), Roles::AppDataRole );
+	}
+
+	// Update the tree's UAC and Args columns visually
+	QStandardItem* parent = treeItem->parent() ? treeItem->parent() : _model.invisibleRootItem();
+	int treeRow = treeItem->row();
+	QStandardItem* uacTreeItem = parent->child( treeRow, COL_UAC );
+	QStandardItem* argsTreeItem = parent->child( treeRow, COL_ARGS_VALUE );
+
+	if( uacTreeItem )
+		uacTreeItem->setCheckState( app.uac ? Qt::Checked : Qt::Unchecked );
+	if( argsTreeItem )
+		argsTreeItem->setText( app.args );
+
+	updateSelectedList();
 }
 
 void MainWindow::toggleAppItem( const QModelIndex& idx, bool checked ) {
@@ -384,62 +665,233 @@ void MainWindow::toggleAppItem( const QModelIndex& idx, bool checked ) {
 
 void MainWindow::updateSelectedList() {
 
-	_selectedList->clear();
-	// walk all items
+	_buildingSelected = true;
+
+	// Clear the selected list model
+	_selectedListModel->clear();
+	_selectedListModel->setColumnCount( 3 );
+	_selectedListModel->setHorizontalHeaderLabels( { "Name", "UAC", "Args" } );
+
+	int row = 0;
+
 	std::function<void( QStandardItem* )> walk = [&] ( QStandardItem* it ) {
 
-		if( !it ) return;
+		if( !it )
+			return;
+
 		const int t = it->data( Roles::TypeRole ).toInt();
+
 		if( t == 1 ) {
 
 			const AppItem app = it->data( Roles::AppDataRole ).value<AppItem>();
+
 			if( app.checked ) {
 
-				auto* item = new QListWidgetItem( app.name + " — " + app.path + ( app.args.isEmpty() ? QString() : ( " " + app.args ) ) );
-				item->setFlags( item->flags() | Qt::ItemIsUserCheckable );
-				item->setCheckState( Qt::Checked );
-				// Store the app path for lookup
-				item->setData( Qt::UserRole, app.path );
-				_selectedList->addItem( item );
+				// Name column
+				auto* nameItem = new QStandardItem( app.name );
+				nameItem->setEditable( false );
+				nameItem->setCheckable( true );
+				nameItem->setCheckState( app.checked ? Qt::Checked : Qt::Unchecked );
+				nameItem->setData( app.path, Qt::UserRole );
+
+				// UAC column
+				auto* uacItem = new QStandardItem();
+				uacItem->setEditable( true );
+				uacItem->setCheckable( true );
+				uacItem->setCheckState( app.uac ? Qt::Checked : Qt::Unchecked );
+
+				// Args column
+				auto* argsItem = new QStandardItem( app.args );
+				argsItem->setEditable( true );
+
+				_selectedListModel->setItem( row, 0, nameItem );
+				_selectedListModel->setItem( row, 1, uacItem );
+				_selectedListModel->setItem( row, 2, argsItem );
+
+				++row;
 			}
 		}
+
+
 		for( int r = 0; r < it->rowCount(); ++r )
 			walk( it->child( r ) );
 		};
 
 	QStandardItem* root = _model.invisibleRootItem();
+
 	for( int r = 0; r < root->rowCount(); ++r )
 		walk( root->child( r ) );
+
+	_buildingSelected = false;
+	applyListCols();
 }
 
-void MainWindow::onSaveBatch() {
-	const QString fileName = QFileDialog::getSaveFileName( this, "Batch speichern", QString(), "Batch (*.bat)" );
-	if( fileName.isEmpty() ) return;
+QStandardItem* MainWindow::findTreeItemByPath( const QString& path ) {
 
-	QFile f( fileName );
-	if( !f.open( QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text ) ) {
-		QMessageBox::warning( this, "Fehler", "Datei kann nicht geschrieben werden." );
-		return;
-	}
-	QTextStream out( &f );
-	out << "@echo off\n";
+	std::function<QStandardItem* ( QStandardItem* )> walk = [&] ( QStandardItem* it ) -> QStandardItem* {
+		if( !it )
+			return nullptr;
 
-	// iterate
-	std::function<void( QStandardItem* )> walk = [&] ( QStandardItem* it ) {
-		if( !it ) return;
 		if( it->data( Roles::TypeRole ).toInt() == 1 ) {
-			const AppItem app = it->data( Roles::AppDataRole ).value<AppItem>();
-			if( app.checked ) {
-				const QString safeName = app.name.trimmed().replace( '|', ' ' );
-				out << "REM Name=" << safeName << " | Args=" << app.args << "\n";
-				out << "start \"\" \"" << app.path << "\" " << app.args << "\n";
-			}
+			const AppItem a = it->data( Roles::AppDataRole ).value<AppItem>();
+			if( a.path.compare( path, Qt::CaseInsensitive ) == 0 )
+				return it;
 		}
-		for( int r = 0; r < it->rowCount(); ++r ) walk( it->child( r ) );
+
+		for( int r = 0; r < it->rowCount(); ++r ) {
+			if( QStandardItem* hit = walk( it->child( r ) ) )
+				return hit;
+		}
+
+		return nullptr;
 		};
 
 	QStandardItem* root = _model.invisibleRootItem();
-	for( int r = 0; r < root->rowCount(); ++r ) walk( root->child( r ) );
+
+	for( int r = 0; r < root->rowCount(); ++r ) {
+		if( QStandardItem* hit = walk( root->child( r ) ) )
+			return hit;
+	}
+
+	return nullptr;
+}
+
+
+void MainWindow::onSaveBatch() {
+
+	const QString fileName = QFileDialog::getSaveFileName( this, "Batch speichern", QString(), "Batch (*.bat)" );
+	if( fileName.isEmpty() ) {
+
+		return;
+	}
+
+	QFile f( fileName );
+	if( !f.open( QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text ) ) {
+
+		QMessageBox::warning( this, "Fehler", "Datei kann nicht geschrieben werden." );
+		return;
+	}
+
+	QTextStream out( &f );
+	out << "@echo off\n";
+
+	// 1) Brauchen wir Elevation?
+	bool needsElevate{ false };
+	std::function<void( QStandardItem* )> scan = [&] ( QStandardItem* it ) {
+
+		if( it == nullptr || needsElevate ) {
+
+			return;
+		}
+
+		if( it->data( Roles::TypeRole ).toInt() == 1 ) {
+
+			const AppItem a = it->data( Roles::AppDataRole ).value<AppItem>();
+			if( a.checked && a.uac ) {
+
+				needsElevate = true;
+				return;
+			}
+		}
+
+		for( int r = 0; r < it->rowCount(); ++r ) {
+
+			scan( it->child( r ) );
+		}
+		};
+
+	if( QStandardItem* root = _model.invisibleRootItem() ) {
+
+		for( int r = 0; r < root->rowCount() && !needsElevate; ++r ) {
+
+			scan( root->child( r ) );
+		}
+	}
+
+	// 2) Self-Elevate-Header (ein Prompt, wenn nötig)
+	if( needsElevate ) {
+
+		out << "whoami /groups | find \"S-1-16-12288\" >NUL\n"
+			"if not %errorlevel%==0 (\n"
+			"  powershell -NoProfile -ExecutionPolicy Bypass -Command \"Start-Process -FilePath '%~f0' -Verb RunAs\"\n"
+			"  exit /b\n"
+			")\n";
+	}
+
+	// 3) Helper zum Escapen für cmd.exe (%, ^, ", &, |, <, >)
+	auto batEscape = [] ( QString s ) -> QString {
+
+		s.replace( "%", "%%" );
+		s.replace( "^", "^^" );
+		s.replace( "\"", "^\"" );
+		s.replace( "&", "^&" );
+		s.replace( "|", "^|" );
+		s.replace( "<", "^<" );
+		s.replace( ">", "^>" );
+		return s;
+		};
+
+	// 4) Apps schreiben (UAC=true: elevated via start; UAC=false: unelevated via :RunUnelevated)
+	std::function<void( QStandardItem* )> walk = [&] ( QStandardItem* it ) {
+
+		if( it == nullptr ) {
+
+			return;
+		}
+
+		if( it->data( Roles::TypeRole ).toInt() == 1 ) {
+
+			const AppItem app = it->data( Roles::AppDataRole ).value<AppItem>();
+			if( app.checked ) {
+
+				const QString safeName = app.name.trimmed().replace( '|', ' ' );
+				const QString exe = batEscape( app.path );
+				const QString args = batEscape( app.args );
+				const QString wd = batEscape( app.workingDir );
+
+				out << "\nREM Name=" << safeName << " | Args=" << app.args << "\n";
+
+				if( app.uac ) {
+
+					if( !wd.isEmpty() ) {
+
+						out << "start \"\" /D \"" << wd << "\" \"" << exe << "\" " << args << "\n";
+					}
+					else {
+
+						out << "start \"\" \"" << exe << "\" " << args << "\n";
+					}
+				}
+				else {
+
+					out << "call :RunUnelevated \"" << exe << "\" \"" << args << "\" \"" << wd << "\"\n";
+				}
+			}
+		}
+
+		for( int r = 0; r < it->rowCount(); ++r ) {
+
+			walk( it->child( r ) );
+		}
+		};
+
+	if( QStandardItem* root2 = _model.invisibleRootItem() ) {
+
+		for( int r = 0; r < root2->rowCount(); ++r ) {
+
+			walk( root2->child( r ) );
+		}
+	}
+
+	// 5) Helper-Label ans Dateiende (damit die Batch oben nicht "hineinläuft")
+	out << "\n:RunUnelevated\n"
+		"set \"exe=%~1\"\n"
+		"set \"args=%~2\"\n"
+		"set \"wd=%~3\"\n"
+		"powershell -NoProfile -ExecutionPolicy Bypass -Command "
+		"\"$s=New-Object -ComObject Shell.Application; $s.ShellExecute($args[0],$args[1],$args[2],'open',1)\" "
+		"\"%exe%\" \"%args%\" \"%wd%\"\n"
+		"exit /b\n";
 }
 
 void MainWindow::onLoadBatch() {
@@ -452,7 +904,7 @@ void MainWindow::onLoadBatch() {
 	QTextStream in( &f );
 
 	struct Entry {
-		QString name, path, args;
+		QString name, path, workingdir, args;
 	};
 	QVector<Entry> entries;
 	QString lastRem;
@@ -511,13 +963,13 @@ void MainWindow::onLoadBatch() {
 					it->setData( QVariant::fromValue( app ), Roles::AppDataRole );
 					it->setData( Qt::CheckState::Checked, Qt::CheckStateRole );
 					// expand parents
-					QModelIndex idx = _model.indexFromItem( it );
-					while( idx.isValid() ) {
-
-						_tree->setExpanded( idx.parent(), true );
-						idx = idx.parent();
+					QModelIndex src = _model.indexFromItem( it );
+					for( QModelIndex p = src.parent(); p.isValid(); p = p.parent() ) {
+						const QModelIndex prox = _proxy->mapFromSource( p );
+						if( prox.isValid() ) {
+							_tree->setExpanded( prox, true );
+						}
 					}
-
 					found = true;
 					return;
 				}
@@ -527,14 +979,38 @@ void MainWindow::onLoadBatch() {
 		for( int r = 0; r < root->rowCount() && !found; ++r ) find( root->child( r ) );
 
 		if( !found ) {
+			// Kein (external)-Ordner: direkt ins Root einfügen
+			QStandardItem* parent = _model.invisibleRootItem(); // oder: ensureFolderPath("")
 
-			QStandardItem* ext = ensureExternal();
-			AppItem app{ e.name.isEmpty() ? QFileInfo( e.path ).completeBaseName() : e.name, e.path, e.args, true };
-			QStandardItem* row = new QStandardItem( app.name );
-			row->setData( 1, Roles::TypeRole );
-			row->setData( QVariant::fromValue( app ), Roles::AppDataRole );
-			row->setData( Qt::Checked, Qt::CheckStateRole );
-			ext->appendRow( row );
+			AppItem app{
+				e.name.isEmpty() ? QFileInfo( e.path ).completeBaseName() : e.name,
+				e.path,
+				e.workingdir,
+				e.args,
+				true            // checked
+				// , /* optional: uac */ false
+			};
+
+			// Spalte 0: Name + Checkbox
+			auto* nameIt = new QStandardItem( app.name );
+			nameIt->setEditable( false );
+			nameIt->setFlags( nameIt->flags() | Qt::ItemIsUserCheckable );
+			nameIt->setData( Qt::Checked, Qt::CheckStateRole );
+			nameIt->setData( 1, Roles::TypeRole );
+			nameIt->setData( QVariant::fromValue( app ), Roles::AppDataRole );
+
+			// Spalte 1: UAC-Checkbox (falls du AppItem::uac nutzt – sonst bleibt unchecked)
+			auto* uacIt = new QStandardItem();
+			uacIt->setEditable( false );
+			uacIt->setFlags( uacIt->flags() | Qt::ItemIsUserCheckable );
+			uacIt->setData( Qt::Unchecked, Qt::CheckStateRole );
+
+			// Spalte 2: Args (editierbar)
+			auto* argsIt = new QStandardItem( app.args );
+			argsIt->setEditable( true );
+
+			parent->appendRow( { nameIt, uacIt, argsIt } );
+
 			_pathIndex.insert( app.path.toLower(), app );
 		}
 	}
@@ -555,9 +1031,12 @@ void MainWindow::onAddExecutable() {
 			AppItem app = it->data( Roles::AppDataRole ).value<AppItem>();
 			if( app.path.compare( file, Qt::CaseInsensitive ) == 0 ) {
 				app.checked = true; it->setData( QVariant::fromValue( app ), Roles::AppDataRole );
-				QModelIndex idx = _model.indexFromItem( it );
-				while( idx.isValid() ) {
-					_tree->setExpanded( idx.parent(), true ); idx = idx.parent();
+				QModelIndex src = _model.indexFromItem( it );
+				for( QModelIndex p = src.parent(); p.isValid(); p = p.parent() ) {
+					const QModelIndex prox = _proxy->mapFromSource( p );
+					if( prox.isValid() ) {
+						_tree->setExpanded( prox, true );
+					}
 				}
 				found = true; return;
 			}
@@ -572,16 +1051,28 @@ void MainWindow::onAddExecutable() {
 	if( !found ) {
 
 		QStandardItem* ext = ensureFolderPath( "(external)" );
-		AppItem app{ QFileInfo( file ).completeBaseName(), file, QString(), true };
-		QStandardItem* row = new QStandardItem( app.name );
-		row->setData( 1, Roles::TypeRole );
-		row->setData( QVariant::fromValue( app ), Roles::AppDataRole );
-		ext->appendRow( row );
-		_pathIndex.insert( app.path.toLower(), app );
+		AppItem app{ QFileInfo( file ).completeBaseName(), file, QString(), QString(), true };
+		auto* nameIt = new QStandardItem( app.name );
+		nameIt->setEditable( false );
+		nameIt->setFlags( nameIt->flags() | Qt::ItemIsUserCheckable );
+		nameIt->setData( Qt::Checked, Qt::CheckStateRole );
+		nameIt->setData( 1, Roles::TypeRole );
+		nameIt->setData( QVariant::fromValue( app ), Roles::AppDataRole );
+
+		auto* uacIt = new QStandardItem();
+		uacIt->setEditable( false );
+		uacIt->setFlags( uacIt->flags() | Qt::ItemIsUserCheckable );
+		uacIt->setData( Qt::Unchecked, Qt::CheckStateRole );
+
+		auto* argsIt = new QStandardItem( app.args );
+		argsIt->setEditable( true );
+
+		ext->appendRow( { nameIt, uacIt, argsIt } );		_pathIndex.insert( app.path.toLower(), app );
 	}
 
 	updateSelectedList();
 }
+
 
 QString MainWindow::extractQuotedPath( const QString& line ) {
 	int first = line.indexOf( '"' ); if( first < 0 ) return {};

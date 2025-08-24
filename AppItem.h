@@ -1,10 +1,11 @@
-#pragma once
+﻿#pragma once
 #include <QString>
 #include <QMetaType>
 
 struct AppItem {
 	QString name;
 	QString path;   // target exe
+	QString workingDir;
 	QString args;
 	bool    checked = false;
 	bool	uac;

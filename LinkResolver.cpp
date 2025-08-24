@@ -1,38 +1,66 @@
+#include "LinkResolver.h"
+
 #ifdef _WIN32
 #  include <windows.h>
 #  include <shobjidl.h>
-#  include <shlguid.h>
 #  include <objbase.h>
-#  include <combaseapi.h>
+#  include <msi.h>
+#  pragma comment(lib, "Ole32.lib")
+#  pragma comment(lib, "Shell32.lib")
+#  pragma comment(lib, "Msi.lib")
 #endif
 #include <QString>
 
-QString resolveShortcutTarget( const QString& lnkPath ) {
+ShortcutInfo resolveShortcut( const QString& lnkPath ) {
 #ifndef _WIN32
 	Q_UNUSED( lnkPath );
-	return QString();
+	return {};
 #else
-	HRESULT hr;
-	CoInitialize( nullptr );
-	IShellLinkW* psl = nullptr;
-	QString result;
+	ShortcutInfo info;
 
-	hr = CoCreateInstance( CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW, ( void** )&psl );
-	if( SUCCEEDED( hr ) && psl ) {
+	CoInitialize( nullptr );
+
+	// 1) Erst MSI-Shortcut versuchen (liefert echten Zielpfad)
+	WCHAR prod[ 39 ]{}, feat[ 128 ]{}, comp[ 39 ]{};
+	if( MsiGetShortcutTargetW( reinterpret_cast< LPCWSTR >( lnkPath.utf16() ), prod, feat, comp ) == ERROR_SUCCESS ) {
+		WCHAR buf[ MAX_PATH ];
+		DWORD cch = MAX_PATH;
+		INSTALLSTATE st = MsiGetComponentPathW( prod, comp, buf, &cch );
+		if( st == INSTALLSTATE_LOCAL || st == INSTALLSTATE_SOURCE ) {
+			info.path = QString::fromWCharArray( buf );
+			info.isMsi = true;
+		}
+	}
+
+	// 2) Zusaetzlich (oder Fallback) normale LNK-Felder lesen
+	IShellLinkW* psl = nullptr;
+	if( SUCCEEDED( CoCreateInstance( CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS( &psl ) ) ) && psl ) {
 		IPersistFile* ppf = nullptr;
-		hr = psl->QueryInterface( IID_IPersistFile, ( void** )&ppf );
-		if( SUCCEEDED( hr ) && ppf ) {
-			hr = ppf->Load( reinterpret_cast< LPCWSTR >( lnkPath.utf16() ), STGM_READ );
-			if( SUCCEEDED( hr ) ) {
-				wchar_t szPath[ MAX_PATH ] = { 0 };
-				hr = psl->GetPath( szPath, MAX_PATH, nullptr, SLGP_RAWPATH );
-				if( SUCCEEDED( hr ) ) result = QString::fromWCharArray( szPath );
+		if( SUCCEEDED( psl->QueryInterface( IID_PPV_ARGS( &ppf ) ) ) && ppf ) {
+			if( SUCCEEDED( ppf->Load( reinterpret_cast< LPCWSTR >( lnkPath.utf16() ), STGM_READ ) ) ) {
+				// Arguments + WorkingDir
+				WCHAR w[ INFOTIPSIZE ]{};
+				if( SUCCEEDED( psl->GetArguments( w, INFOTIPSIZE ) ) ) {
+					info.arguments = QString::fromWCharArray( w );
+				}
+				if( SUCCEEDED( psl->GetWorkingDirectory( w, INFOTIPSIZE ) ) ) {
+					info.workingDir = QString::fromWCharArray( w );
+				}
+
+				// Falls kein MSI-Ziel ermittelt wurde: normalen Pfad nehmen
+				if( info.path.isEmpty() ) {
+					WCHAR path[ MAX_PATH ]{};
+					if( SUCCEEDED( psl->GetPath( path, MAX_PATH, nullptr, SLGP_UNCPRIORITY ) ) ) {
+						info.path = QString::fromWCharArray( path );
+					}
+				}
 			}
 			ppf->Release();
 		}
 		psl->Release();
 	}
+
 	CoUninitialize();
-	return result;
+	return info;
 #endif
 }
