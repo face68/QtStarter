@@ -66,4 +66,10 @@
       <Filter>Header Files</Filter>
     </QtMoc>
   </ItemGroup>
+  <ItemGroup>
+    <Page Include="BlankPage.xaml" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="packages.config" />
+  </ItemGroup>
 </Project>
