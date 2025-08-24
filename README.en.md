@@ -69,7 +69,7 @@ Usage
 
     Filter using the search (folders appear as needed).
 
-    Check the apps; set UAC, Args, Working Dir per app.
+    Check the apps; set UAC, Args per app.
 
     Click Save Batch to export.
 

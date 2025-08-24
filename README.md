@@ -69,7 +69,7 @@ Verwendung
 
     Oben im Suchfeld filtern (Ordner werden passend eingeblendet).
 
-    Gewünschte Apps anhaken; UAC, Args, Working Dir setzen.
+    Gewünschte Apps anhaken; UAC, Args.
 
     Batch speichern klicken.
 
