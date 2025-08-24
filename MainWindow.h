@@ -53,7 +53,7 @@ class MainWindow: public QMainWindow {
 		QPointer<QLineEdit>				_searchEdit;
 		QSortFilterProxyModel*			_proxy;
 		// fast lookup by path
-		QHash<QString, AppItem>			_pathIndex; // key: exe path (stored lower-cased)
+		QHash<QString, App::AppItem>			_pathIndex; // key: exe path (stored lower-cased)
 		bool							_buildingSelected;
 		bool							_stylingNow{ false };
 };

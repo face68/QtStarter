@@ -1,4 +1,6 @@
-#include "LinkResolver.h"
+﻿#include "LinkResolver.h"
+
+#include <QDebug>
 
 #ifdef _WIN32
 #  include <windows.h>
@@ -18,7 +20,18 @@ ShortcutInfo resolveShortcut( const QString& lnkPath ) {
 #else
 	ShortcutInfo info;
 
-	CoInitialize( nullptr );
+	HRESULT hr = CoInitialize( nullptr );
+	if( FAILED( hr ) ) {
+		// Fehler behandeln, z.B.:
+		if( hr == S_FALSE ) {
+			// COM wurde bereits initialisiert - das ist normalerweise OK
+		}
+		else {
+			// Kritischer Fehler bei der COM-Initialisierung
+			qWarning() << "Failed to initialize COM:" << hr;
+			return {}; // Oder andere Fehlerbehandlung
+		}
+	}
 
 	// 1) Erst MSI-Shortcut versuchen (liefert echten Zielpfad)
 	WCHAR prod[ 39 ]{}, feat[ 128 ]{}, comp[ 39 ]{};

@@ -1,7 +1,8 @@
-#include <QApplication>
+﻿#include <QApplication>
 #include "MainWindow.h"
 
 int main( int argc, char* argv[] ) {
+
 	QApplication app( argc, argv );
 	QApplication::setApplicationName( "StarterQt" );
 	QApplication::setOrganizationName( "Starter" );

@@ -23,28 +23,25 @@
 
 #include <windows.h>
 
-auto dump = [&] ( const QPalette& pal, QPalette::ColorGroup g ) {
-	qDebug() << "Base" << pal.color( g, QPalette::Base );
-	qDebug() << "Alt " << pal.color( g, QPalette::AlternateBase );
-	qDebug() << "Win " << pal.color( g, QPalette::Window );
-	};
-
 static QString startMenuCommon() {
+
 	const QString programData = qEnvironmentVariable( "ProgramData" );
 	return programData + "/Microsoft/Windows/Start Menu/Programs";
 }
 
 static QString startMenuUser() {
+
 	const QString appData = qEnvironmentVariable( "AppData" );
 	return appData + "/Microsoft/Windows/Start Menu/Programs";
 }
 
 MainWindow::MainWindow( QWidget* parent ) : QMainWindow( parent ), _buildingSelected( false ) {
 
-	qRegisterMetaType<AppItem>( "AppItem" );
+	qRegisterMetaType<App::AppItem>( "AppItem" );
 	buildUi();
 	scanStartMenu();
 	setStyleSheets();
+
 	QTimer::singleShot( 0, this, [this] () { applyListCols(); } );
 }
 
@@ -199,6 +196,7 @@ void MainWindow::changeEvent( QEvent* e ) {
 }
 
 void MainWindow::applyListCols() {
+
 	// --- Liste ---
 	auto* lhdr = _selectedListView->horizontalHeader();
 
@@ -245,38 +243,44 @@ void MainWindow::scanStartMenu() {
 	};
 
 	// 2) Buckets: key = relativer Ordnerpfad ("" = Root-Apps)
-	QMap<QString, QVector<AppItem>> buckets;
+	QMap<QString, QVector<App::AppItem>> buckets;
 
 	for( const QString& root : roots ) {
 
 		if( root.isEmpty() || !QDir( root ).exists() ) continue;
 
 		QDirIterator it( root, { "*.lnk","*.exe" }, QDir::Files, QDirIterator::Subdirectories );
+
 		while( it.hasNext() ) {
+
 			const QString file = it.next();
 
 			QString workdir;
 			QString target = file;
+
 			if( file.endsWith( ".lnk", Qt::CaseInsensitive ) ) {
+
 				const auto s = resolveShortcut( file );
 				target = s.path;
 				workdir = s.workingDir;
-				// args/workingDir kannst du hier direkt ins AppItem übernehmen, wenn gewünscht:
-				// app.args = s.arguments;
+
 				if( target.isEmpty() || !target.endsWith( ".exe", Qt::CaseInsensitive ) ) {
+
 					continue;
 				}
 			}
 			else if( !file.endsWith( ".exe", Qt::CaseInsensitive ) ) {
+
 				continue;
 			}
 
 			const QString rel = getRelativeFolder( root, file ); // → "" für extern/Root
 			QString name = QFileInfo( file ).completeBaseName();
+
 			if( name.contains( "Uninstall", Qt::CaseInsensitive ) || name.contains( "deinstall", Qt::CaseInsensitive ) )
 				continue;
 
-			AppItem app{ name, target, workdir, QString(), false };
+			App::AppItem app{ name, target, workdir, QString(), false };
 			buckets[ rel ].push_back( app );
 			_pathIndex.insert( app.path.toLower(), app );
 		}
@@ -298,6 +302,7 @@ void MainWindow::scanStartMenu() {
 		QStringList parts = relPath.split( QRegularExpression( "[/\\\\]" ), Qt::SkipEmptyParts );
 		QString acc;
 		QStandardItem* parent = _model.invisibleRootItem();
+
 		for( const QString& part : parts ) {
 
 			acc = acc.isEmpty() ? part : acc + "/" + part;
@@ -328,15 +333,17 @@ void MainWindow::scanStartMenu() {
 			parent = folder;
 			folderNodeByPath.insert( acc, folder );
 		}
+
 		return parent;
 		};
 
 	// 4) ZUERST Root-Apps (Key = ""), alphabetisch
 	{
 		auto apps = buckets.value( QString() );
-		std::sort( apps.begin(), apps.end(), [] ( const AppItem& a, const AppItem& b ) {
+		std::sort( apps.begin(), apps.end(), [] ( const App::AppItem& a, const App::AppItem& b ) {
 			return a.name.localeAwareCompare( b.name ) < 0;
 				   } );
+
 		for( const auto& app : apps ) {
 
 			auto* nameIt = new QStandardItem( app.name );
@@ -366,11 +373,12 @@ void MainWindow::scanStartMenu() {
 	for( auto it = buckets.cbegin(); it != buckets.cend(); ++it ) {
 
 		auto apps = it.value();
-		std::sort( apps.begin(), apps.end(), [] ( const AppItem& a, const AppItem& b ) {
+		std::sort( apps.begin(), apps.end(), [] ( const App::AppItem& a, const App::AppItem& b ) {
 
 			return a.name.localeAwareCompare( b.name ) < 0;
 				   } );
 		QStandardItem* folder = ensureFolder( it.key() );
+
 		for( const auto& app : apps ) {
 
 			auto* nameIt = new QStandardItem( app.name );
@@ -410,20 +418,25 @@ QStandardItem* MainWindow::ensureFolderPath( const QString& relFolder ) {
 	const QStringList parts = clean.split( QRegularExpression( "[/\\\\]" ), Qt::SkipEmptyParts );
 
 	for( const QString& part : parts ) {
+
 		QStandardItem* match = nullptr;
 
 		// defensiv: child(r,0) kann null sein -> überspringen
 		for( int r = 0; r < parent->rowCount(); ++r ) {
+
 			QStandardItem* it = parent->child( r, 0 );
-			if( !it ) continue;
-			if( it->data( Roles::TypeRole ).toInt() == 0 &&
-				it->text().compare( part, Qt::CaseInsensitive ) == 0 ) {
+			if( !it )
+				continue;
+
+			if( it->data( Roles::TypeRole ).toInt() == 0 && it->text().compare( part, Qt::CaseInsensitive ) == 0 ) {
+
 				match = it;
 				break;
 			}
 		}
 
 		if( !match ) {
+
 			match = new QStandardItem( part );
 			match->setEditable( false );
 			match->setData( 0, Roles::TypeRole );
@@ -431,12 +444,8 @@ QStandardItem* MainWindow::ensureFolderPath( const QString& relFolder ) {
 
 			auto* uacDummy = new QStandardItem();
 			auto* argsDummy = new QStandardItem();
-			uacDummy->setFlags( ( Qt::ItemIsEnabled )
-								 & ~( Qt::ItemIsEditable | Qt::ItemIsSelectable
-								 | Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled ) );
-			argsDummy->setFlags( ( Qt::ItemIsEnabled )
-								 & ~( Qt::ItemIsEditable | Qt::ItemIsSelectable
-								 | Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled ) );
+			uacDummy->setFlags( ( Qt::ItemIsEnabled ) & ~( Qt::ItemIsEditable | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled ) );
+			argsDummy->setFlags( ( Qt::ItemIsEnabled ) & ~( Qt::ItemIsEditable | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled ) );
 
 			parent->appendRow( { match, uacDummy, argsDummy } );
 		}
@@ -453,9 +462,11 @@ QString MainWindow::getRelativeFolder( const QString& root, const QString& fullP
 	QString normFullPath = QDir::fromNativeSeparators( QFileInfo( fullPath ).absoluteFilePath() );
 	QString dir = QFileInfo( normFullPath ).absolutePath();
 
-	if( !normRoot.endsWith( '/' ) ) normRoot += '/';
+	if( !normRoot.endsWith( '/' ) )
+		normRoot += '/';
 
 	if( dir.startsWith( normRoot, Qt::CaseInsensitive ) ) {
+
 		QString rel = dir.mid( normRoot.size() );
 		rel.remove( QRegularExpression( "^/+" ) );
 		rel.remove( QRegularExpression( "/+$" ) );
@@ -470,9 +481,11 @@ void MainWindow::onSearchTextChanged( const QString& text ) {
 	_proxy->setFilterRegularExpression( rx );
 
 	if( !text.isEmpty() ) {
+
 		_tree->expandAll();
 	}
 	else {
+
 		_tree->collapseAll();
 	}
 }
@@ -480,11 +493,13 @@ void MainWindow::onSearchTextChanged( const QString& text ) {
 void MainWindow::onTreeDoubleClicked( const QModelIndex& idx ) {
 
 	if( !idx.isValid() ) {
+
 		return;
 	}
 
 	QModelIndex srcIdx = _proxy->mapToSource( idx );
 	if( !srcIdx.isValid() ) {
+
 		return;
 	}
 
@@ -507,7 +522,7 @@ void MainWindow::onTreeDoubleClicked( const QModelIndex& idx ) {
 		return;
 	}
 
-	AppItem app = srcIdx.data( Roles::AppDataRole ).value<AppItem>();
+	App::AppItem app = srcIdx.data( Roles::AppDataRole ).value<App::AppItem>();
 	app.checked = !app.checked;
 	_model.setData( srcIdx, QVariant::fromValue( app ), Roles::AppDataRole );
 	_model.dataChanged( srcIdx, srcIdx, { Roles::AppDataRole } );
@@ -518,17 +533,18 @@ void MainWindow::onTreeDoubleClicked( const QModelIndex& idx ) {
 void MainWindow::onListDoubleClicked( const QModelIndex& idx ) {
 
 	if( !idx.isValid() || idx.column() != 0 ) {
+
 		return;
 	}
 
 	QStandardItem* item = _selectedListModel->itemFromIndex( idx );
 	if( !item ) {
+
 		return;
 	}
 
 	const bool checked = ( item->checkState() == Qt::Checked );
 	item->setCheckState( checked ? Qt::Unchecked : Qt::Checked );
-	// löst automatisch onSelectedListItemChanged aus
 }
 
 void MainWindow::onModelDataChanged( const QModelIndex& topLeft, const QModelIndex& bottomRight, const QVector<int>& roles ) {
@@ -554,7 +570,7 @@ void MainWindow::onModelDataChanged( const QModelIndex& topLeft, const QModelInd
 	// Check direkt vom Item lesen – stabil bei Root & Child
 	const bool checkedNow = ( nameIt->checkState() == Qt::Checked );
 
-	AppItem app = nameIt->data( Roles::AppDataRole ).value<AppItem>();
+	App::AppItem app = nameIt->data( Roles::AppDataRole ).value<App::AppItem>();
 	app.checked = checkedNow;
 
 	if( checkedNow ) {
@@ -606,15 +622,25 @@ void MainWindow::onSelectedListItemChanged( QStandardItem* item ) {
 	if( !treeItem )
 		return;
 
-	AppItem app = treeItem->data( Roles::AppDataRole ).value<AppItem>();
+	App::AppItem app = treeItem->data( Roles::AppDataRole ).value<App::AppItem>();
 
 	// Reflect checkbox state
-	bool checked = nameItem->checkState() == Qt::Checked;
-	if( !checked ) {
-		if( treeItem ) {
-			treeItem->setData( Qt::Unchecked, Qt::CheckStateRole );
+	bool checked = false;
+	if( nameItem ) {
+
+		checked = nameItem->checkState() == Qt::Checked;
+
+		if( !checked ) {
+
+			if( treeItem ) {
+
+				treeItem->setData( Qt::Unchecked, Qt::CheckStateRole );
+			}
+			return;  // früh beenden -> kein Zugriff mehr auf gelöschte Items
 		}
-		return;  // früh beenden -> kein Zugriff mehr auf gelöschte Items
+	}
+	else {
+		return; // Wenn nameItem null ist, früh beenden
 	}
 
 	app.checked = checked;
@@ -654,13 +680,13 @@ void MainWindow::toggleAppItem( const QModelIndex& idx, bool checked ) {
 	if( !idx.isValid() )
 		return;
 
-	AppItem app = idx.data( Roles::AppDataRole ).value<AppItem>();
+	App::AppItem app = idx.data( Roles::AppDataRole ).value<App::AppItem>();
 	app.checked = checked;
 	_model.setData( idx, QVariant::fromValue( app ), Roles::AppDataRole );
+
 	// emit dataChanged so delegate updates checkbox
 	_model.dataChanged( idx, idx, { Roles::AppDataRole } );
 	updateSelectedList();
-	//emit appItemCheckToggled( app, checked );
 }
 
 void MainWindow::updateSelectedList() {
@@ -683,7 +709,7 @@ void MainWindow::updateSelectedList() {
 
 		if( t == 1 ) {
 
-			const AppItem app = it->data( Roles::AppDataRole ).value<AppItem>();
+			const App::AppItem app = it->data( Roles::AppDataRole ).value<App::AppItem>();
 
 			if( app.checked ) {
 
@@ -729,11 +755,12 @@ void MainWindow::updateSelectedList() {
 QStandardItem* MainWindow::findTreeItemByPath( const QString& path ) {
 
 	std::function<QStandardItem* ( QStandardItem* )> walk = [&] ( QStandardItem* it ) -> QStandardItem* {
+
 		if( !it )
 			return nullptr;
 
 		if( it->data( Roles::TypeRole ).toInt() == 1 ) {
-			const AppItem a = it->data( Roles::AppDataRole ).value<AppItem>();
+			const App::AppItem a = it->data( Roles::AppDataRole ).value<App::AppItem>();
 			if( a.path.compare( path, Qt::CaseInsensitive ) == 0 )
 				return it;
 		}
@@ -749,6 +776,7 @@ QStandardItem* MainWindow::findTreeItemByPath( const QString& path ) {
 	QStandardItem* root = _model.invisibleRootItem();
 
 	for( int r = 0; r < root->rowCount(); ++r ) {
+
 		if( QStandardItem* hit = walk( root->child( r ) ) )
 			return hit;
 	}
@@ -786,7 +814,7 @@ void MainWindow::onSaveBatch() {
 
 		if( it->data( Roles::TypeRole ).toInt() == 1 ) {
 
-			const AppItem a = it->data( Roles::AppDataRole ).value<AppItem>();
+			const App::AppItem a = it->data( Roles::AppDataRole ).value<App::AppItem>();
 			if( a.checked && a.uac ) {
 
 				needsElevate = true;
@@ -819,15 +847,14 @@ void MainWindow::onSaveBatch() {
 	}
 
 	// 3) Escaper für cmd.exe (%, ^, \", &, |, <, >)
-	auto batEscape = [] ( QString s ) -> QString {
+	auto escapeArgs = [] ( QString s ) -> QString {
 
-		s.replace( "%", "%%" );
 		s.replace( "^", "^^" );
-		s.replace( "\"", "^\"" );
 		s.replace( "&", "^&" );
 		s.replace( "|", "^|" );
 		s.replace( "<", "^<" );
 		s.replace( ">", "^>" );
+		// KEIN % -> %% hier! (ENV-Variablen in Args sollen expandieren)
 		return s;
 		};
 
@@ -841,45 +868,57 @@ void MainWindow::onSaveBatch() {
 
 		if( it->data( Roles::TypeRole ).toInt() == 1 ) {
 
-			const AppItem app = it->data( Roles::AppDataRole ).value<AppItem>();
+			const App::AppItem app = it->data( Roles::AppDataRole ).value<App::AppItem>();
 			if( app.checked ) {
 
 				const QString safeName = app.name.trimmed().replace( '|', ' ' );
-				const QString exe = batEscape( app.path );
-				const QString args = batEscape( app.args );
-				const QString wd = batEscape( app.workingDir );
+
+				// Pfade/WD NICHT escapen; nur in Anführungszeichen setzen
+				const QString exe = app.path;
+				const QString wd = app.workingDir;
+
+				// Args leicht escapen (ohne %), damit z.B. & | < > nicht den Parser stören
+				const QString args = escapeArgs( app.args );
 
 				out << "\nREM Name=" << safeName << " | Args=" << app.args << "\n";
 
 				if( needsElevate ) {
 
 					if( app.uac ) {
-
+						// elevated
 						if( !wd.isEmpty() ) {
-
-							out << "start \"\" /D \"" << wd << "\" \"" << exe << "\" " << args << "\n";
+							out << "start \"\" /D \"" << wd << "\" \"" << exe << "\"";
 						}
 						else {
-
-							out << "start \"\" \"" << exe << "\" " << args << "\n";
+							out << "start \"\" \"" << exe << "\"";
 						}
+						if( !args.isEmpty() ) {
+							out << " " << args;
+						}
+						out << "\n";
 					}
 					else {
-
-						// Unelevated über Explorer-Shell
-						out << "call :RunUnelevated \"" << exe << "\" \"" << args << "\" \"" << wd << "\"\n";
+						// unelevated über Helper; 2 oder 3 Parameter je nach Args
+						if( args.isEmpty() ) {
+							out << "call :RunUnelevated \"" << exe << "\" \"\" \"" << wd << "\"\n";
+						}
+						else {
+							out << "call :RunUnelevated \"" << exe << "\" \"" << args << "\" \"" << wd << "\"\n";
+						}
 					}
 				}
 				else {
-					// keine UAC-Apps insgesamt -> alles normal
+					// keine UAC-Apps insgesamt -> alles normal (kein Helper nötig)
 					if( !wd.isEmpty() ) {
-
-						out << "start \"\" /D \"" << wd << "\" \"" << exe << "\" " << args << "\n";
+						out << "start \"\" /D \"" << wd << "\" \"" << exe << "\"";
 					}
 					else {
-
-						out << "start \"\" \"" << exe << "\" " << args << "\n";
+						out << "start \"\" \"" << exe << "\"";
 					}
+					if( !args.isEmpty() ) {
+						out << " " << args;
+					}
+					out << "\n";
 				}
 			}
 		}
@@ -954,9 +993,13 @@ void MainWindow::onLoadBatch() {
 
 	// uncheck all
 	std::function<void( QStandardItem* )> uncheck = [&] ( QStandardItem* it ) {
-		if( !it ) return;
+
+		if( !it )
+			return;
+
 		if( it->data( Roles::TypeRole ).toInt() == 1 ) {
-			AppItem app = it->data( Roles::AppDataRole ).value<AppItem>();
+
+			App::AppItem app = it->data( Roles::AppDataRole ).value<App::AppItem>();
 			app.checked = false;
 			app.args.clear();
 			it->setData( QVariant::fromValue( app ), Roles::AppDataRole );
@@ -965,11 +1008,15 @@ void MainWindow::onLoadBatch() {
 		}
 		for( int r = 0; r < it->rowCount(); ++r ) uncheck( it->child( r ) );
 		};
+
 	QStandardItem* root = _model.invisibleRootItem();
-	for( int r = 0; r < root->rowCount(); ++r ) uncheck( root->child( r ) );
+	for( int r = 0; r < root->rowCount(); ++r )
+		uncheck( root->child( r ) );
 
 	// mark or create under (external)
-	auto ensureExternal = [&] () { return ensureFolderPath( "" ); };
+	auto ensureExternal = [&] () { 
+		return ensureFolderPath( "" );
+		};
 
 	for( const auto& e : entries ) {
 
@@ -983,7 +1030,7 @@ void MainWindow::onLoadBatch() {
 
 			if( it->data( Roles::TypeRole ).toInt() == 1 ) {
 
-				AppItem app = it->data( Roles::AppDataRole ).value<AppItem>();
+				App::AppItem app = it->data( Roles::AppDataRole ).value<App::AppItem>();
 
 				if( app.path.compare( e.path, Qt::CaseInsensitive ) == 0 ) {
 
@@ -1005,13 +1052,15 @@ void MainWindow::onLoadBatch() {
 			}
 			for( int r = 0; r < it->rowCount(); ++r ) find( it->child( r ) );
 			};
-		for( int r = 0; r < root->rowCount() && !found; ++r ) find( root->child( r ) );
+
+		for( int r = 0; r < root->rowCount() && !found; ++r )
+			find( root->child( r ) );
 
 		if( !found ) {
 			// Kein (external)-Ordner: direkt ins Root einfügen
 			QStandardItem* parent = _model.invisibleRootItem(); // oder: ensureFolderPath("")
 
-			AppItem app{
+			App::AppItem app{
 				e.name.isEmpty() ? QFileInfo( e.path ).completeBaseName() : e.name,
 				e.path,
 				e.workingdir,
@@ -1055,15 +1104,23 @@ void MainWindow::onAddExecutable() {
 	// if exists in index -> check it & expand
 	bool found = false;
 	std::function<void( QStandardItem* )> find = [&] ( QStandardItem* it ) {
-		if( !it || found ) return;
+
+		if( !it || found )
+			return;
+
 		if( it->data( Roles::TypeRole ).toInt() == 1 ) {
-			AppItem app = it->data( Roles::AppDataRole ).value<AppItem>();
+
+			App::AppItem app = it->data( Roles::AppDataRole ).value<App::AppItem>();
 			if( app.path.compare( file, Qt::CaseInsensitive ) == 0 ) {
+
 				app.checked = true; it->setData( QVariant::fromValue( app ), Roles::AppDataRole );
 				QModelIndex src = _model.indexFromItem( it );
+
 				for( QModelIndex p = src.parent(); p.isValid(); p = p.parent() ) {
+
 					const QModelIndex prox = _proxy->mapFromSource( p );
 					if( prox.isValid() ) {
+
 						_tree->setExpanded( prox, true );
 					}
 				}
@@ -1074,13 +1131,14 @@ void MainWindow::onAddExecutable() {
 		};
 
 	QStandardItem* root = _model.invisibleRootItem();
+
 	for( int r = 0; r < root->rowCount() && !found; ++r )
 		find( root->child( r ) );
 
 	if( !found ) {
 
 		QStandardItem* ext = ensureFolderPath( "(external)" );
-		AppItem app{ QFileInfo( file ).completeBaseName(), file, QString(), QString(), true };
+		App::AppItem app{ QFileInfo( file ).completeBaseName(), file, QString(), QString(), true };
 		auto* nameIt = new QStandardItem( app.name );
 		nameIt->setEditable( false );
 		nameIt->setFlags( nameIt->flags() | Qt::ItemIsUserCheckable );
@@ -1104,18 +1162,36 @@ void MainWindow::onAddExecutable() {
 
 
 QString MainWindow::extractQuotedPath( const QString& line ) {
-	int first = line.indexOf( '"' ); if( first < 0 ) return {};
-	int second = line.indexOf( '"', first + 1 ); if( second < 0 ) return {};
-	int third = line.indexOf( '"', second + 1 ); if( third < 0 ) return {};
-	int fourth = line.indexOf( '"', third + 1 ); if( fourth < 0 ) return {};
+
+	int first = line.indexOf( '"' ); if( first < 0 )
+		return {};
+
+	int second = line.indexOf( '"', first + 1 );
+	if( second < 0 )
+		return {};
+
+	int third = line.indexOf( '"', second + 1 );
+	if( third < 0 )
+		return {};
+
+	int fourth = line.indexOf( '"', third + 1 );
+	if( fourth < 0 )
+		return {};
+
 	return line.mid( third + 1, fourth - third - 1 );
 }
 
 QString MainWindow::extractArgsAfterQuotedPath( const QString& line ) {
+
 	int count = 0, fourth = -1;
+
 	for( int i = 0; i < line.size(); ++i ) {
+
 		if( line[ i ] == '"' ) {
-			++count; if( count == 4 ) {
+
+			++count;
+			
+			if( count == 4 ) {
 				fourth = i; break;
 			}
 		}
@@ -1124,15 +1200,22 @@ QString MainWindow::extractArgsAfterQuotedPath( const QString& line ) {
 }
 
 QString MainWindow::parseRemName( const QString& remLine ) {
-	if( !remLine.startsWith( "REM ", Qt::CaseInsensitive ) ) return {};
+
+	if( !remLine.startsWith( "REM ", Qt::CaseInsensitive ) )
+		return {};
+
 	const QString body = remLine.mid( 4 );
 	const QStringList parts = body.split( '|', Qt::SkipEmptyParts );
+
 	for( const QString& p : parts ) {
+
 		const int eq = p.indexOf( '=' );
 		if( eq > 0 ) {
+
 			const QString k = p.left( eq ).trimmed();
 			if( k.compare( "Name", Qt::CaseInsensitive ) == 0 ) return p.mid( eq + 1 ).trimmed();
 		}
 	}
+
 	return {};
 }

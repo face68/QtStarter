@@ -7,21 +7,6 @@
 #include <QMouseEvent>
 #include "AppItem.h"
 
-static QColor resolveOverWindow( const QPalette& pal, bool alt ) {
-
-	QColor winCol = pal.color( QPalette::Window );
-	QColor base = pal.color( alt ? QPalette::AlternateBase : QPalette::Base );
-	const qreal a = base.alphaF();
-
-	return QColor::fromRgbF(
-
-		base.redF() * a + winCol.redF() * ( 1.0 - a ),
-		base.greenF() * a + winCol.greenF() * ( 1.0 - a ),
-		base.blueF() * a + winCol.blueF() * ( 1.0 - a ),
-		1.0
-	);
-}
-
 void AppListDelegate::paint( QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index ) const {
 
 	painter->save();
@@ -31,12 +16,8 @@ void AppListDelegate::paint( QPainter* painter, const QStyleOptionViewItem& opti
 	opt.state &= ~QStyle::State_HasFocus;
 	opt.state &= ~QStyle::State_Selected;
 
-
 	QStyle* st = QApplication::style();
 	QPalette pal = opt.palette;
-
-	// Hintergrund/Zelle
-	//st->drawPrimitive( QStyle::PE_PanelItemViewItem, &opt, painter, opt.widget );
 
 	QRect rect = option.rect;
 	const int margin = 4;
@@ -68,14 +49,11 @@ void AppListDelegate::paint( QPainter* painter, const QStyleOptionViewItem& opti
 
 		QStyleOptionButton uac;
 		uac.palette = opt.palette;
-		uac.state = QStyle::State_Enabled
-			| ( index.data( Qt::CheckStateRole ).toInt() == Qt::Checked ? QStyle::State_On : QStyle::State_Off );
+		uac.state = QStyle::State_Enabled | ( index.data( Qt::CheckStateRole ).toInt() == Qt::Checked ? QStyle::State_On : QStyle::State_Off );
 
 		const int w = st->pixelMetric( QStyle::PM_IndicatorWidth, &opt, opt.widget );
 		const int h = st->pixelMetric( QStyle::PM_IndicatorHeight, &opt, opt.widget );
-		uac.rect = QRect( option.rect.left() + ( option.rect.width() - w ) / 2,
-						  option.rect.top() + ( option.rect.height() - h ) / 2,
-						  w, h );
+		uac.rect = QRect( option.rect.left() + ( option.rect.width() - w ) / 2, option.rect.top() + ( option.rect.height() - h ) / 2, w, h );
 		st->drawControl( QStyle::CE_CheckBox, &uac, painter, opt.widget );
 	}
 	else if( index.column() == 2 ) {
@@ -99,8 +77,6 @@ void AppListDelegate::paint( QPainter* painter, const QStyleOptionViewItem& opti
 		QRect r = cell.adjusted( 2, 4, -4, -4 );
 		painter->fillRect( r, base );
 
-		//r = cell.adjusted( 2, 4, -3, -2 );
-
 		// optional: hauchdünner Rand
 		painter->setPen( QColor( 0, 0, 0, 20 ) );
 		painter->drawLine( r.topLeft(), r.topRight() );
@@ -114,9 +90,6 @@ void AppListDelegate::paint( QPainter* painter, const QStyleOptionViewItem& opti
 		QStyle* st = opt.widget ? opt.widget->style() : QApplication::style();
 		st->drawItemText( painter, tr, Qt::AlignVCenter | Qt::AlignLeft,
 						  pal, true, index.data( Qt::DisplayRole ).toString(), QPalette::Text );
-//		painter->setFont( option.font );
-//		painter->drawText( rect.adjusted( margin, 0, -margin, 0 ), Qt::AlignVCenter | Qt::AlignLeft,
-//						   index.data( Qt::DisplayRole ).toString() );
 	}
 
 	painter->restore();

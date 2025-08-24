@@ -2,16 +2,23 @@
 #include <QString>
 #include <QMetaType>
 
-struct AppItem {
-	QString name;
-	QString path;   // target exe
-	QString workingDir;
-	QString args;
-	bool    checked = false;
-	bool	uac;
-};
+namespace App {
+	struct AppItem {
+		QString name;
+		QString path;
+		QString workingDir;
+		QString args;
+		bool    checked;
+		bool    uac;
+		AppItem() : checked( false ), uac( false ) {
+		}
+		AppItem( const QString& name, const QString& path, const QString& workingDir, const QString& args, bool checked, bool uac = false )
+			: name( name ), path( path ), workingDir( workingDir ), args( args ), checked( checked ), uac( uac ) {
+		}
+	};
+}
 
-Q_DECLARE_METATYPE( AppItem )
+Q_DECLARE_METATYPE( App::AppItem )
 
 // Custom role keys
 namespace Roles {
