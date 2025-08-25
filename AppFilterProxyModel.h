@@ -14,26 +14,34 @@ class AppFilterProxyModel: public QSortFilterProxyModel {
 	protected:
 	bool filterAcceptsRow( int source_row, const QModelIndex& source_parent ) const override {
 
-		if( filterRegularExpression().pattern().isEmpty() ) {
-			return true;
-		}
 
 		const QModelIndex idx = sourceModel()->index( source_row, filterKeyColumn(), source_parent );
 		const int t = idx.data( Roles::TypeRole ).toInt();
+		const bool isManual = idx.data( Roles::ManualRole ).toBool();
 
-		// Nur Apps werden gegen den Regex geprüft
+		// 1) Auch ohne Suchtext: manuelle Apps verbergen
+		if( filterRegularExpression().pattern().isEmpty() ) {
+			if( t == _appType ) {
+				return !isManual;           // Apps: nur zeigen, wenn NICHT manuell
+			}
+			return true;                    // Ordner immer zeigen
+		}
+
+		// 2) Mit Suchtext:
 		if( t == _appType ) {
+			if( isManual ) {
+				return false;               // manuelle Apps nie im Tree
+			}
 			return QSortFilterProxyModel::filterAcceptsRow( source_row, source_parent );
 		}
 
-		// Ordner bleiben nur, wenn ein Kind akzeptiert wird
+		// Ordner bleibt, wenn ein Kind akzeptiert wird
 		const int childCount = sourceModel()->rowCount( idx );
 		for( int r = 0; r < childCount; ++r ) {
 			if( filterAcceptsRow( r, idx ) ) {
 				return true;
 			}
 		}
-
 		return false;
 	}
 

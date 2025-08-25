@@ -1,60 +1,52 @@
 ﻿# Batch Starter (Qt)
 
-[Deutsch](README.md) | **English**
+**English** | [Deutsch](README.md)
 
-A small Windows utility to launch multiple programs with one click. Browse apps in a tree, choose what you need, and export a `.bat` that starts everything—optionally with admin (UAC) and per-app arguments.
+A small Windows tool to start multiple programs with one click. Browse apps in the tree, select them, and export a `.bat`—with optional admin rights (UAC), per-app arguments, and (for manually added apps) a custom working directory.
 
 ## Features
-- **Layout:** Search + buttons on top; **tree (top)** and **selection list (bottom)** separated by a **vertical QSplitter** (draggable height).
-- **Search:** case-insensitive and matches **apps only**; folders remain as containers when a child matches.
-- **Per app:** checkbox (include), **UAC flag**, arguments.
-- **Export to .BAT**  
-  - If **any** app needs UAC → **one** UAC prompt at start. UAC apps run elevated; non-UAC apps are launched **unelevated** via Explorer’s shell.
-  - If **none** needs UAC → all apps start normally (no prompt).
+- **Layout:** Search field + buttons at the top; **Tree (top)** and **Selection list (bottom)** separated by a **vertical QSplitter**.
+- **Search:** Case-insensitive; matches **apps only**. Folders stay visible as containers when a child matches.
+- **Per app in the selection list:** Checkbox (include), **UAC flag**, **Args**, **WorkDir** *(editable only for manually added apps)*.
+- **Add EXE/BAT:** Add files that are not in the Start Menu. These entries appear **only in the selection list** (hidden in the tree). Duplicates are allowed (e.g., several `cmd.exe` with different args).
+- **Export to .BAT (per entry):**
+  - **UAC off:** normal start (`start "" ...`).
+  - **UAC on:** that entry is started elevated (PowerShell `Start-Process ... -Verb RunAs`).
+  - There is **no global** self-elevate header anymore.
 
 ## How the exported batch works
-- **Self-elevate header** (only when needed).
-- **Elevated app**:
-  ```bat
-  start "" "C:\Path\App\app.exe" --args
+A comment line with meta info precedes each start, e.g.:
+REM Name=<NAME> | Manual=<0|1> | Args=<ARGS>
 
-    Non-UAC app unelevated when batch is elevated:
+Unelevated (UAC off):
+start "" /D "E:\Optional\WorkingDir" "C:\Path\To\App.exe" --args
 
-    call :RunUnelevated "C:\Path\App\app.exe" "--args"
+Elevated (UAC on):
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+ "Start-Process -FilePath 'C:\Path\To\App.exe' -WorkingDirectory 'E:\Optional\WorkingDir' -ArgumentList '--args' -Verb RunAs"
 
-The batch closes after launching everything (exit). A goto :eof prevents falling through into the helper label.
+Notes:
+- A bare drive like `E:` is normalized to `E:\` for `WorkDir`.
+- Manually added entries have an editable **WorkDir** in the list; tree entries use the working directory from their `.lnk` (not editable).
+- Drag & drop between **elevated** and **normal** windows is blocked by Windows (UIPI).
+- Mapped network drives may be missing in elevated processes; consider using UNC paths (`\\server\share`).
 
-    Notes:
-    • Drag & drop between elevated and normal windows is blocked by Windows (UIPI).
-    • Mapped network drives may differ under the admin token—prefer UNC paths (\server\share).
-    • If you want environment variables like %USERPROFILE% to expand inside Args, don’t double the % in args.
+## Requirements
+- **OS:** Windows 10/11
+- **Build:** Qt 6.x (Widgets), MSVC or MinGW
+- **Tools:** Qt Creator or CMake/Ninja
 
-Requirements
+## Build
+1. Install Qt 6.x (MSVC recommended).
+2. Open and build the project in Qt Creator — or configure with CMake.
 
-    OS: Windows 10/11
+## Usage
+1. Launch the app.
+2. Filter via the search field.
+3. Tick desired apps; set **UAC** and **Args**.
+4. Use **Add EXE/BAT** for items not in the tree; edit **WorkDir** in the list (manual entries only).
+5. Click **Save Batch**.
+6. Run the `.bat`; UAC prompts appear **per app** that requires elevation.
 
-    Build: Qt 6.x (Widgets), MSVC or MinGW
-
-    Tools: Qt Creator or CMake/Ninja
-
-Build
-
-    Install Qt 6.x (MSVC recommended).
-
-    Open in Qt Creator and build—or configure with CMake.
-
-Usage
-
-    Launch the app.
-
-    Filter using the search bar.
-
-    Check apps; set UAC and Args as needed.
-
-    Click Save Batch to export.
-
-    Run the .bat; if prompted once, click Yes.
-
-License
-
+## License
 MIT License

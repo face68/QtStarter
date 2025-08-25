@@ -23,7 +23,9 @@ Q_DECLARE_METATYPE( App::AppItem )
 // Custom role keys
 namespace Roles {
 	enum: int {
-		TypeRole = Qt::UserRole + 1,  // 0=folder, 1=app
-		AppDataRole,                  // QVariant::fromValue(AppItem)
+		TypeRole = Qt::UserRole + 1,	// 0=folder, 1=app
+		AppDataRole,					// QVariant::fromValue(AppItem)
+		TreeIndexRole,					// QPersistentModelIndex for mapping Liste <-> Tree
+		ManualRole,						// For manually added apps
 	};
 }
