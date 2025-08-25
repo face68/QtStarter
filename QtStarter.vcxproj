@@ -120,6 +120,9 @@
   <ItemGroup>
     <Text Include="README.en.md" />
     <Text Include="README.md" />
+    <Text Include="LICENSE" />
+    <Text Include="SECURITY.md" />
+    <Text Include="CONTRIBUTING.md" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Condition="Exists('$(QtMsBuild)\qt.targets')">
